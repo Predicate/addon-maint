@@ -43,8 +43,8 @@ local cvar_register, cmd_register, lua_error do --find function offsets by known
 	end
 
 	local function findByArg1(arg)
-		local raw = arg:gsub(".", function(c) return string.format("%02x", string.byte(c)) end)
-		local revaddr = string.hex(FindMemory(rdata, raw)):gsub("(%x)(%x)", "%2%1"):reverse()
+		local raw = "00"..arg:gsub(".", function(c) return string.format("%02x", string.byte(c)) end).."00"
+		local revaddr = string.hex(FindMemory(rdata, raw)+1):gsub("(%x)(%x)", "%2%1"):reverse()
 		return nextcall(FindMemory(base, "68"..revaddr)).JmpAddress
 	end
 
