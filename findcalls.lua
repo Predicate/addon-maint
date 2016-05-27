@@ -21,13 +21,13 @@ In headless mode, Olly will automatically exit after scanning is complete.
 If an error occurs, processing will stop and Olly will not exit. Error details can be found in the Log window.
 --]]
 
-
-
-
---These settings will need updating if number of args to register functions change.
-local CVAR_ARGS, CCMD_ARGS, ERROR_ARGS, ENUM_ARGS = 9, 5, 2, 2
---These settings will need updating if their underlying values are removed (very unlikely)
-local CVAR_KNOWN, CCMD_KNOWN, ERROR_KNOWN, ENUM_KNOWN = "hwDetect", "reloadUI", [[Usage: GetCVar("cvar")]], "LE_ACTIONBAR_STATE_MAIN"
+--name = { args, known string, filter_anon }
+local searches = {
+	CVars = { 9, "hwDetect", true },
+	CCmds = { 5, "reloadUI", true },
+	Errors = { 2, [[Usage: GetCVar("cvar")]], false },
+	Enums = { 2, "LE_ACTIONBAR_STATE_MAIN", false }
+}
 
 SuspendAllThreads()
 local base, rdata = FindMainModule():CodeBase(), FindMainModule():IATBase()
@@ -35,7 +35,9 @@ local base, rdata = FindMainModule():CodeBase(), FindMainModule():IATBase()
 local printf = HEADLESS and function(...) io.write(string.format(...),"\n") end or function(...) print(string.format(...)) end
 local function isMask(a, b) return bit.band(a, b) == b end
 
-local cvar_register, cmd_register, lua_error do --find function offsets by known call args
+local funcs = {}
+
+do --find function offsets by known call args
 	local function nextcall(addr)
 		local curAddr, t = addr
 		repeat
@@ -51,10 +53,9 @@ local cvar_register, cmd_register, lua_error do --find function offsets by known
 		return nextcall(FindMemory(base, "68"..revaddr)).JmpAddress
 	end
 
-	cvar_register = findByArg1(CVAR_KNOWN)
-	cmd_register = findByArg1(CCMD_KNOWN)
-	lua_error = findByArg1(ERROR_KNOWN)
-	enum_set = findByArg1(ENUM_KNOWN)
+	for k, v in pairs(searches) do
+		funcs[findByArg1(v[2])] = k
+	end
 end
 
 local _func = {} --sentinel to mark C function pointers
@@ -82,10 +83,9 @@ local getcallargs do
 
 	getcallargs = function (ptr, numArgs)
 		local curPtr, t = ptr
-		local args = {}
+		local args = {n = 0}
 		for i = 1, numArgs do
 			curPtr, t = prevpush(curPtr)
-
 			local op1 = t.Operands[1]
 			if isMask(op1.Argument, B_SXTCONST) then
 				args[i] = op1.Constant
@@ -101,14 +101,17 @@ local getcallargs do
 			end
 		end
 		return args
-
 	end
 end
 
-local cvars, anon_cvars = {}, {}
-local ccmds, anon_ccmds = {}, {}
-local errors = {}
-local enums = {}
+local results = {}
+
+for k,v in pairs(searches) do
+	results[k] = {}
+	if v[3] then
+		results[k.."_anon"] = {}
+	end
+end
 
 local addr, size, ptr = base, FindMainModule():CodeSize(), 0
 while addr < base+size do
@@ -118,28 +121,14 @@ while addr < base+size do
 		local t = Disasm(addr)
 		buf[ptr] = t
 		if isMask(t.CmdType, D_CALL) then
-			if t.JmpAddress == cvar_register then --found cvar
-				local args = getcallargs(ptr, CVAR_ARGS)
-				if args[1] then
-					cvars[#cvars+1] = args
+			local name = funcs[t.JmpAddress]
+			if name then
+				local ret = getcallargs(ptr, searches[name][1])
+				if searches[name][3] and not ret[1] then
+					table.insert(results[name.."_anon"], ret)
 				else
-					anon_cvars[#anon_cvars+1] = args
+					table.insert(results[name], ret)
 				end
-			elseif t.JmpAddress == cmd_register then --found console command
-				local args = getcallargs(ptr, CCMD_ARGS)
-				if args[1] then
-					ccmds[#ccmds+1] = args
-				else
-					anon_ccmds[#anon_ccmds+1] = args
-				end
-			elseif t.JmpAddress == lua_error then
-				local args = getcallargs(ptr, ERROR_ARGS)
-				if args[2] then
-					errors[#errors+1] = args[2]
-				end
-			elseif t.JmpAddress == enum_set then
-				local args = getcallargs(ptr, ENUM_ARGS)
-				enums[args[1]] = args[2]
 			end
 		end
 	end
@@ -147,7 +136,8 @@ while addr < base+size do
 	addr = addr+chunk
 end
 
-local function dump(obj, argNum)
+local function dump(name, obj, argNum)
+	printf("%s = {", name)
 	for _, t in ipairs(obj) do
 		printf("  {")
 		for i = 1, argNum do
@@ -164,36 +154,16 @@ local function dump(obj, argNum)
 		end
 		printf("  },")
 	end
+	printf("}")
 end
 
 local function alphabetize(a, b)  return a[1] < b[1] end
 
-table.sort(cvars, alphabetize)
-printf("cvars = {")
-dump(cvars, CVAR_ARGS)
-printf("}")
+table.sort(results.CVars, alphabetize)
+table.sort(results.CCmds, alphabetize)
 
-printf("anon_cvars = {")
-dump(anon_cvars, CVAR_ARGS)
-printf("}")
-
-table.sort(ccmds, alphabetize)
-printf("ccmds = {")
-dump(ccmds, CCMD_ARGS)
-printf("}")
-
-printf("anon_ccmds = {")
-dump(anon_ccmds, CCMD_ARGS)
-printf("}")
-
-table.sort(errors)
-printf("errors = {")
-for i, v in ipairs(errors) do printf("    %q,", v) end
-printf("}")
-
-printf("enums = {")
-for k, v in pairs(enums) do printf("    %q = %s,", k, v) end
-printf("}")
-
+for k, v in pairs(results) do
+	dump(k, v, (searches[k] or searches[k:gsub("_anon", "")])[1])
+end
 
 if HEADLESS then os.exit(0) end
