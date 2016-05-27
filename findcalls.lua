@@ -21,10 +21,13 @@ In headless mode, Olly will automatically exit after scanning is complete.
 If an error occurs, processing will stop and Olly will not exit. Error details can be found in the Log window.
 --]]
 
+
+
+
 --These settings will need updating if number of args to register functions change.
-local CVAR_ARGS, CCMD_ARGS, ERROR_ARGS = 9, 5, 2
+local CVAR_ARGS, CCMD_ARGS, ERROR_ARGS, ENUM_ARGS = 9, 5, 2, 2
 --These settings will need updating if their underlying values are removed (very unlikely)
-local CVAR_KNOWN, CCMD_KNOWN, ERROR_KNOWN = "hwDetect", "reloadUI", [[Usage: GetCVar("cvar")]]
+local CVAR_KNOWN, CCMD_KNOWN, ERROR_KNOWN, ENUM_KNOWN = "hwDetect", "reloadUI", [[Usage: GetCVar("cvar")]], "LE_ACTIONBAR_STATE_MAIN"
 
 SuspendAllThreads()
 local base, rdata = FindMainModule():CodeBase(), FindMainModule():IATBase()
@@ -51,6 +54,7 @@ local cvar_register, cmd_register, lua_error do --find function offsets by known
 	cvar_register = findByArg1(CVAR_KNOWN)
 	cmd_register = findByArg1(CCMD_KNOWN)
 	lua_error = findByArg1(ERROR_KNOWN)
+	enum_set = findByArg1(ENUM_KNOWN)
 end
 
 local _func = {} --sentinel to mark C function pointers
@@ -104,6 +108,7 @@ end
 local cvars, anon_cvars = {}, {}
 local ccmds, anon_ccmds = {}, {}
 local errors = {}
+local enums = {}
 
 local addr, size, ptr = base, FindMainModule():CodeSize(), 0
 while addr < base+size do
@@ -132,6 +137,9 @@ while addr < base+size do
 				if args[2] then
 					errors[#errors+1] = args[2]
 				end
+			elseif t.JmpAddress == enum_set then
+				local args = getcallargs(ptr, ENUM_ARGS)
+				enums[args[1]] = args[2]
 			end
 		end
 	end
@@ -182,5 +190,10 @@ table.sort(errors)
 printf("errors = {")
 for i, v in ipairs(errors) do printf("    %q,", v) end
 printf("}")
+
+printf("enums = {")
+for k, v in pairs(enums) do printf("    %q = %s,", k, v) end
+printf("}")
+
 
 if HEADLESS then os.exit(0) end
